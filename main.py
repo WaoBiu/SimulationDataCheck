@@ -72,6 +72,7 @@ class MainWindow(QMainWindow):
         self.frequencies = None   # 频率数组
         self.antenna_count = 0    # 天线数量
         self.complex_data = None  # 复数数据数组: [频率][角度][天线] = A*exp(ia)
+        self.current_plot_type = "amplitude"  # 当前绘图类型: "amplitude" 或 "phase"
         
         # 初始化两个页面
         self.init_welcome_page()
@@ -137,6 +138,19 @@ class MainWindow(QMainWindow):
         self.canvas = FigureCanvas(self.figure)
         layout.addWidget(self.canvas)
         
+        # 幅值/相位切换按钮
+        btn_layout = QHBoxLayout()
+        self.btn_amplitude = QPushButton("幅度方向图")
+        self.btn_phase = QPushButton("相位方向图")
+        self.btn_amplitude.setStyleSheet("background-color: #4CAF50; color: white;")
+        self.btn_amplitude.clicked.connect(self.on_amplitude_clicked)
+        self.btn_phase.clicked.connect(self.on_phase_clicked)
+        btn_layout.addStretch(1)
+        btn_layout.addWidget(self.btn_amplitude)
+        btn_layout.addWidget(self.btn_phase)
+        btn_layout.addStretch(1)
+        layout.addLayout(btn_layout)
+        
         # 增加一个返回按钮（方便调试）
         self.btn_back = QPushButton("重新导入")
         self.btn_back.clicked.connect(lambda: self.stacked_widget.setCurrentWidget(self.welcome_page))
@@ -163,11 +177,12 @@ class MainWindow(QMainWindow):
         result = dialog.exec() # 阻塞执行，等待用户点击
         
         if result == QDialog.DialogCode.Accepted:
-            # 用户点击了“继续” -> 刷新窗口显示图表
-            self.draw_amplitude_pattern()
+            # 用户点击了"继续" -> 刷新窗口显示图表
+            self.current_plot_type = "amplitude"
+            self.update_plot()
             self.stacked_widget.setCurrentWidget(self.plot_page)
         else:
-            # 用户点击了“退出”或关闭了对话框 -> 什么都不做，留在原页面
+            # 用户点击了"退出"或关闭了对话框 -> 什么都不做，留在原页面
             pass
 
     # ------------------------------------------
@@ -306,7 +321,7 @@ class MainWindow(QMainWindow):
         
         # 构建复数数据数组 [频率][角度][天线]
         num_freqs = len(self.frequencies)
-        num_angles = 360  # 去除最后一个点（360度与0度相同）
+        num_angles = 361  # 保留完整的361个点（0-360度）
         
         try:
             self.complex_data = np.zeros((num_freqs, num_angles, max_antenna), dtype=np.complex128)
@@ -339,11 +354,11 @@ class MainWindow(QMainWindow):
         """
         读取 CSV 文件数据，包含频率和角度信息
         格式要求：第一列为频率，最后一列为数据值
-        每个频率有361行数据（0-360度），返回时去除最后一行（360度）
+        每个频率有361行数据（0-360度），保留所有361个点
         返回: (frequencies, data_array, angles)
             frequencies: 唯一频率数组
-            data_array: [频率][角度] 的数据数组（360个角度）
-            angles: 角度数组（360个，0-359度）
+            data_array: [频率][角度] 的数据数组（361个角度）
+            angles: 角度数组（361个，0-360度）
         抛出异常: 如果数据不完整（每个频率应包含361行数据）
         """
         freq_data_map = {}  # {freq: [values]}
@@ -380,16 +395,15 @@ class MainWindow(QMainWindow):
         if incomplete_freqs:
             raise ValueError(f"{filename}: 数据不完整\n  " + "\n  ".join(incomplete_freqs))
         
-        # 构建角度数组（0-359度，共360个点）
-        angles = np.linspace(0, 359, 360)
+        # 构建角度数组（0-360度，共361个点）
+        num_angles = 361
+        angles = np.linspace(0, 360, num_angles)
         
-        # 构建数据数组（去除360度点）
-        num_angles = 360
+        # 构建数据数组（保留所有361个点）
         data_array = np.zeros((num_freqs, num_angles))
         
         for i, freq in enumerate(sorted_freqs):
             data = freq_data_map[freq]
-            # 取前360个点（去除360度点）
             data_array[i, :] = np.array(data[:num_angles])
         
         return np.array(sorted_freqs), data_array, angles
@@ -441,20 +455,18 @@ class MainWindow(QMainWindow):
     def draw_amplitude_pattern(self):
         """绘制天线幅度方向图（第一个频率点）"""
         self.figure.clear()
-        
+
         if self.amplitude_data and self.frequencies is not None:
-            # 使用第一个频率的数据绘制方向图
             ax = self.figure.add_subplot(111)
-            
+
             colors = ['blue', 'red', 'green', 'orange', 'purple', 'cyan', 'magenta', 'brown']
-            angles = np.linspace(0, 359, 360)
-            
+            angles = np.linspace(0, 360, 361)
+
             for i, (antenna_id, (freqs, amp_values, _)) in enumerate(sorted(self.amplitude_data.items())):
                 color = colors[i % len(colors)]
-                # 取第一个频率的幅度数据
                 if len(freqs) > 0 and len(amp_values) > 0:
                     ax.plot(angles, amp_values[0], linewidth=2, color=color, label=f'天线{antenna_id}')
-            
+
             ax.set_title(f"天线幅度方向图 (频率: {self.frequencies[0]:.4f} GHz)", fontsize=14)
             ax.set_xlabel("角度 (度)")
             ax.set_ylabel("幅度 (dB)")
@@ -462,12 +474,60 @@ class MainWindow(QMainWindow):
             ax.set_xlim(0, 360)
             ax.legend()
         else:
-            # 如果没有数据，显示提示
             ax = self.figure.add_subplot(111)
             ax.text(0.5, 0.5, '暂无幅度数据', ha='center', va='center', fontsize=14)
             ax.set_title("天线幅度方向图", fontsize=14)
-        
+
         self.canvas.draw()
+
+    def draw_phase_pattern(self):
+        """绘制天线相位方向图（第一个频率点）"""
+        self.figure.clear()
+
+        if self.phase_data and self.frequencies is not None:
+            ax = self.figure.add_subplot(111)
+
+            colors = ['blue', 'red', 'green', 'orange', 'purple', 'cyan', 'magenta', 'brown']
+            angles = np.linspace(0, 360, 361)
+
+            for i, (antenna_id, (freqs, phase_values, _)) in enumerate(sorted(self.phase_data.items())):
+                color = colors[i % len(colors)]
+                if len(freqs) > 0 and len(phase_values) > 0:
+                    ax.plot(angles, phase_values[0], linewidth=2, color=color, label=f'天线{antenna_id}')
+
+            ax.set_title(f"天线相位方向图 (频率: {self.frequencies[0]:.4f} GHz)", fontsize=14)
+            ax.set_xlabel("角度 (度)")
+            ax.set_ylabel("相位 (度)")
+            ax.grid(True, linestyle='--')
+            ax.set_xlim(0, 360)
+            ax.legend()
+        else:
+            ax = self.figure.add_subplot(111)
+            ax.text(0.5, 0.5, '暂无相位数据', ha='center', va='center', fontsize=14)
+            ax.set_title("天线相位方向图", fontsize=14)
+
+        self.canvas.draw()
+
+    def update_plot(self):
+        """根据当前绘图类型更新图表"""
+        if self.current_plot_type == "amplitude":
+            self.draw_amplitude_pattern()
+        else:
+            self.draw_phase_pattern()
+
+    def on_amplitude_clicked(self):
+        """幅度按钮点击事件"""
+        self.current_plot_type = "amplitude"
+        self.btn_amplitude.setStyleSheet("background-color: #4CAF50; color: white;")
+        self.btn_phase.setStyleSheet("")
+        self.update_plot()
+
+    def on_phase_clicked(self):
+        """相位按钮点击事件"""
+        self.current_plot_type = "phase"
+        self.btn_phase.setStyleSheet("background-color: #4CAF50; color: white;")
+        self.btn_amplitude.setStyleSheet("")
+        self.update_plot()
 
 # ==========================================
 # 程序启动入口
